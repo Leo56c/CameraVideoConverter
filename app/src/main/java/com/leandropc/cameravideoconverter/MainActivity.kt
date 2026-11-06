@@ -51,7 +51,30 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val crashFile = File(filesDir, "ultimo_error.txt")
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try { crashFile.writeText(android.util.Log.getStackTraceString(e).take(1500)) } catch (_: Throwable) {}
+            previous?.uncaughtException(t, e)
+        }
         buildInterface()
+        if (crashFile.exists()) {
+            statusLabel.text = "La app se cerró por este error:\n\n" + crashFile.readText()
+            crashFile.delete()
+        } else if (android.os.Build.VERSION.SDK_INT >= 30) {
+            try {
+                val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+                val ultimo = am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull()
+                val prefs = getSharedPreferences("diag", MODE_PRIVATE)
+                if (ultimo != null && (ultimo.reason == 4 || ultimo.reason == 5) &&
+                    ultimo.timestamp > prefs.getLong("visto", 0L)) {
+                    prefs.edit().putLong("visto", ultimo.timestamp).apply()
+                    val pasoFile = File(filesDir, "paso.txt")
+                    val ultimoPaso = if (pasoFile.exists()) pasoFile.readText() else "sin dato"
+                    statusLabel.text = "La app se cerró.\nMotivo: ${ultimo.reason} (4=error Java, 5=error nativo)\nDetalle: ${ultimo.description}\nÚltimo paso: $ultimoPaso"
+                }
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun buildInterface() {
@@ -163,6 +186,7 @@ class MainActivity : ComponentActivity() {
             var inputFile: File? = null
             val outputFile = File(cacheDir, "converted_${System.currentTimeMillis()}.mp4")
             try {
+                paso("copiando el video de entrada")
                 inputFile = File(cacheDir, "input_${System.currentTimeMillis()}.video")
                 contentResolver.openInputStream(sourceUri).use { input ->
                     requireNotNull(input) { "No se pudo leer el video seleccionado." }
@@ -176,32 +200,38 @@ class MainActivity : ComponentActivity() {
                 }
                 val inputArg = "'" + inputFile.absolutePath + "'"
                 val outputArg = "'" + outputFile.absolutePath + "'"
-                val command = "-y -i $inputArg -vf \"$filter\" -c:v h264_mediacodec -b:v 2500k -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -movflags +faststart $outputArg"
+                val command = "-y -i $inputArg -vf \"$filter\" -c:v libopenh264 -b:v 2500k -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -movflags +faststart $outputArg"
+                paso("ejecutando FFmpeg con libopenh264")
                 var session = FFmpegKit.execute(command)
+                paso("FFmpeg termino el primer intento, codigo=${session.returnCode}")
 
-                // Some phones do not expose a compatible hardware H.264 encoder through FFmpeg.
+                // Si el codificador H.264 por software no esta disponible, se usa MPEG-4.
                 if (!ReturnCode.isSuccess(session.returnCode)) {
                     outputFile.delete()
                     val fallback = "-y -i $inputArg -vf \"$filter\" -c:v mpeg4 -q:v 4 -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -movflags +faststart $outputArg"
+                    paso("ejecutando FFmpeg con mpeg4")
                     session = FFmpegKit.execute(fallback)
+                    paso("FFmpeg termino el segundo intento, codigo=${session.returnCode}")
                 }
                 if (!ReturnCode.isSuccess(session.returnCode) || !outputFile.exists() || outputFile.length() == 0L) {
                     throw IllegalStateException("No se pudo convertir el video. Probá con otro archivo MP4.")
                 }
 
+                paso("copiando el resultado al destino")
                 contentResolver.openOutputStream(destinationUri, "w").use { stream ->
                     requireNotNull(stream) { "No se pudo guardar el archivo elegido." }
                     outputFile.inputStream().use { it.copyTo(stream) }
                 }
+                paso("terminado sin problemas")
                 runOnUiThread {
                     progress.visibility = ProgressBar.GONE
                     statusLabel.text = "¡Listo! El video se guardó correctamente."
                     convertButton.isEnabled = true
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 runOnUiThread {
                     progress.visibility = ProgressBar.GONE
-                    statusLabel.text = "Error: ${e.message ?: "No se pudo procesar el video."}"
+                    statusLabel.text = "Error: ${e.javaClass.simpleName}: ${e.message ?: "No se pudo procesar el video."}"
                     convertButton.isEnabled = true
                 }
             } finally {
@@ -209,6 +239,10 @@ class MainActivity : ComponentActivity() {
                 outputFile.delete()
             }
         }
+    }
+
+    private fun paso(msg: String) {
+        try { File(filesDir, "paso.txt").writeText(msg) } catch (_: Throwable) {}
     }
 
     private fun queryDisplayName(uri: Uri): String {
