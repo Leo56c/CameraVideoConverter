@@ -1,6 +1,5 @@
 package com.leandropc.cameravideoconverter
 
-import android.app.Activity
 import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
@@ -14,16 +13,15 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import android.app.Activity
 import com.arthenica.ffmpegkit.FFmpegKit
-import com.arthenica.ffmpegkit.FFmpegKitConfig
 import com.arthenica.ffmpegkit.ReturnCode
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private enum class CropMode { FULL, TOP, BOTTOM }
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -176,8 +174,8 @@ class MainActivity : Activity() {
                     CropMode.TOP -> "crop=iw:ih/2:0:0,scale='min(1080,iw)':-2"
                     CropMode.BOTTOM -> "crop=iw:ih/2:0:ih/2,scale='min(1080,iw)':-2"
                 }
-                val inputArg = FFmpegKitConfig.escapeArgument(inputFile.absolutePath)
-                val outputArg = FFmpegKitConfig.escapeArgument(outputFile.absolutePath)
+                val inputArg = "'" + inputFile.absolutePath + "'"
+                val outputArg = "'" + outputFile.absolutePath + "'"
                 val command = "-y -i $inputArg -vf \"$filter\" -c:v h264_mediacodec -b:v 2500k -pix_fmt yuv420p -c:a aac -b:a 128k -ar 44100 -ac 2 -movflags +faststart $outputArg"
                 var session = FFmpegKit.execute(command)
 
